@@ -4,38 +4,28 @@ import { User } from "../models/user.model.js";
 import { apiResponse } from "../utils/ApiResponse.js";
 import { uploadFileCloudinary } from "../utils/Cloudinary.js";
 
-const generateAccessAndRefreshToken = async userId => {
+const generateAccessAndRefreshToken = async (userId) => {
   try {
     const user = await User.findById(userId);
-    const accessToken = user.generateAccessToken();
-    const refreshToken = user.generateRefreshToken();
-    user.refreshToken = refreshToken;
-    await user.save({ validateBeforeSave: false });
+    const accessToken = user.getjwttoken();
+    // const refreshToken = user.generateRefreshToken();
+    // user.refreshToken = refreshToken;
+    // await user.save({ validateBeforeSave: false });
 
-    return { accessToken, refreshToken };
+    return { accessToken };
   } catch (error) {
     throw new apiError(500, "Token generation failed");
   }
 };
 
 const registerUser = asyncHandler(async (req, res) => {
-  /*
- Get user details from frontEnd
-validation- check if all fields are filled
-check if user already exists
-check if avatar are uploaded
-upload them to cloudinary
-create  user object - create entry in database
-remove password and refresh token field from response
-check for user creation
-return res
-*/
+  console.log(req.body);
 
   const { username, email, fullname, password } = req.body;
   // console.log("Recieved Email Is: ", email);
 
   if (
-    [username, email, fullname, password].some(field => field?.trim() === "")
+    [username, email, fullname, password].some((field) => field?.trim() === "")
   ) {
     throw new apiError(400, "All fields are required");
   }
@@ -86,6 +76,7 @@ return res
   if (!createdUser) {
     throw new apiError(500, "User creation failed while registing the user");
   }
+  console.log(createdUser, 789);
 
   return res
     .status(201)
@@ -123,6 +114,7 @@ send cookies
   const { accessToken, refreshToken } = await generateAccessAndRefreshToken(
     user._id
   );
+  console.log(accessToken, refreshToken);
 
   const loggedInUser = await User.findById(user._id).select(
     "-password -refreshToken"
@@ -130,7 +122,8 @@ send cookies
 
   const options = {
     httpOnly: true,
-    secure: true,
+    // secure: true, // Uncomment this if you are using HTTPS
+    sameSite: "None",
   };
   // console.log("AccessToken is: ", accessToken);
   // console.log("RefreshToken is: ", refreshToken);
@@ -162,10 +155,20 @@ const logoutUser = asyncHandler(async (req, res) => {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
   };
-  return res.cookie
-    .clearCookie("accessToken", options)
-    .clearCookie("refreshToken", options)
-    .json(new apiResponse(200, {}, "User logged out successfully"));
+  res.clearCookie("accessToken", {
+    httpOnly: true,
+    sameSite: "None",
+    secure: process.env.NODE_ENV === "production",
+  });
+  res.clearCookie("refreshToken", {
+    httpOnly: true,
+    sameSite: "None",
+    secure: process.env.NODE_ENV === "production",
+  });
+
+  res.status(200).json({
+    message: "Successfully logged out",
+  });
 });
 
 export { registerUser, loginUser, logoutUser };
