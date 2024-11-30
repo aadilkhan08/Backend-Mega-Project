@@ -3,15 +3,15 @@ import { apiError } from "../utils/ApiError.js";
 import { User } from "../models/user.model.js";
 import { apiResponse } from "../utils/ApiResponse.js";
 import { uploadFileCloudinary } from "../utils/Cloudinary.js";
+import jwt from "jsonwebtoken";
 
 const generateAccessAndRefreshToken = async userId => {
   try {
     const user = await User.findById(userId);
-    const accessToken = user.generateAccessToken();
-    const refreshToken = user.generateRefreshToken();
+    const accessToken = user.getjwttoken();
+    const refreshToken = user.getRefreshjwttoken();
     user.refreshToken = refreshToken;
     await user.save({ validateBeforeSave: false });
-
     return { accessToken, refreshToken };
   } catch (error) {
     throw new apiError(500, "Token generation failed");
@@ -32,7 +32,6 @@ return res
 */
 
   const { username, email, fullname, password } = req.body;
-  // console.log("Recieved Email Is: ", email);
 
   if (
     [username, email, fullname, password].some(field => field?.trim() === "")
@@ -49,7 +48,6 @@ return res
   }
 
   const avatarLocalPath = req.files?.avatar[0]?.path;
-  // const coverLocalPath = req.files?.cover[0]?.path;
   let coverLocalPath;
   if (
     req.files &&
@@ -82,6 +80,7 @@ return res
   const createdUser = await User.findById(user._id).select(
     "-password -refreshToken"
   );
+  // console.log(createdUser, 789);
 
   if (!createdUser) {
     throw new apiError(500, "User creation failed while registing the user");
@@ -127,13 +126,11 @@ send cookies
   const loggedInUser = await User.findById(user._id).select(
     "-password -refreshToken"
   );
-
   const options = {
     httpOnly: true,
-    secure: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "none",
   };
-  // console.log("AccessToken is: ", accessToken);
-  // console.log("RefreshToken is: ", refreshToken);
   return res
     .status(200)
     .cookie("accessToken", accessToken, options)
@@ -145,7 +142,6 @@ send cookies
         "User logged in successfully"
       )
     );
-  console.log("Access And Refresh Token Are: ", accessToken, refreshToken);
 });
 
 const logoutUser = asyncHandler(async (req, res) => {
@@ -160,12 +156,55 @@ const logoutUser = asyncHandler(async (req, res) => {
   );
   const options = {
     httpOnly: true,
+    sameSite: "None",
     secure: process.env.NODE_ENV === "production",
   };
-  return res.cookie
+  res
+    .status(200)
     .clearCookie("accessToken", options)
     .clearCookie("refreshToken", options)
     .json(new apiResponse(200, {}, "User logged out successfully"));
 });
 
-export { registerUser, loginUser, logoutUser };
+const refreshAccessToken = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.cookies || req.body;
+  if (!refreshToken) {
+    throw new apiError(401, "Please login to access");
+  }
+  try {
+    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
+    const user = await User.findById(decoded?._id);
+    if (!user) {
+      throw new apiError(401, "Invalid Refresh Token");
+    }
+
+    if (user.refreshToken !== refreshToken) {
+      throw new apiError(401, "Refresh Token Is Expired Or Used");
+    }
+
+    const options = {
+      httpOnly: true,
+      sameSite: "None",
+      secure: process.env.NODE_ENV === "production",
+    };
+
+    const { accessToken, refreshToken: newRefreshToken } =
+      await generateAccessAndRefreshToken(user._id);
+
+    return res
+      .status(200)
+      .cookie("accessToken", accessToken, options)
+      .cookie("refreshToken", newRefreshToken, options)
+      .json(
+        new apiResponse(
+          200,
+          { accessToken, newRefreshToken },
+          "Token Refreshed Successfully"
+        )
+      );
+  } catch (error) {
+    throw new apiError(401, error?.message || "Invalid Refresh Token");
+  }
+});
+
+export { registerUser, loginUser, logoutUser, refreshAccessToken };
