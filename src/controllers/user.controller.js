@@ -2,7 +2,10 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { apiError } from "../utils/ApiError.js";
 import { User } from "../models/user.model.js";
 import { apiResponse } from "../utils/ApiResponse.js";
-import { uploadFileCloudinary } from "../utils/Cloudinary.js";
+import {
+  uploadFileCloudinary,
+  deleteFileCloudinary,
+} from "../utils/Cloudinary.js";
 import jwt from "jsonwebtoken";
 
 const generateAccessAndRefreshToken = async userId => {
@@ -259,7 +262,7 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
   const avatarLocalPath = req.file?.path;
 
   if (!avatarLocalPath) {
-    throw new apiError(400, "Avatar is required");
+    throw new apiError(400, "Avatar Local is required");
   }
 
   const avatar = await uploadFileCloudinary(avatarLocalPath);
@@ -268,16 +271,18 @@ const updateUserAvatar = asyncHandler(async (req, res) => {
     throw new apiError(400, "Error while uploading avatar");
   }
 
-  const user = await User.findByIdAndUpdate(
-    req.user?._id,
-    {
-      $set: { avatar: avatar.secure_url },
-    },
-    { new: true }
-  ).select("-password");
+  const user = await User.findById(req.user?._id).select("-password");
 
   if (!user) {
     throw new apiError(500, "User avatar update failed");
+  }
+
+  const previousAvatarUrl = user.avatar.secure_url;
+  user.avatar = avatar.secure_url;
+  await user.save({ validateBeforeSave: false });
+
+  if (previousAvatarUrl) {
+    await deleteFileCloudinary(previousAvatarUrl);
   }
 
   return res
@@ -298,21 +303,152 @@ const updateUserCover = asyncHandler(async (req, res) => {
     throw new apiError(400, "Error while uploading cover");
   }
 
-  const user = await User.findByIdAndUpdate(
-    req.user?._id,
-    {
-      $set: { cover: cover.secure_url },
-    },
-    { new: true }
-  ).select("-password");
+  const user = await User.findById(req.user?._id).select("-password");
 
   if (!user) {
     throw new apiError(500, "User cover update failed");
   }
 
+  const previousCoverUrl = user.cover.secure_url;
+  user.cover = cover.secure_url;
+  await user.save({ validateBeforeSave: false });
+
+  if (previousCoverUrl) {
+    await deleteFileCloudinary(previousCoverUrl);
+  }
+
   return res
     .status(200)
     .json(new apiResponse(200, user, "User cover updated successfully"));
+});
+
+const getUserChannelProfile = asyncHandler(async (req, res) => {
+  const { username } = req.params;
+
+  if (!username?.trim()) {
+    throw new apiError(400, "Username is required");
+  }
+
+  const channel = await User.aggregate([
+    {
+      $match: {
+        username: username?.toLowerCase(),
+      },
+    },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "channel",
+        as: "subscribers",
+      },
+    },
+    {
+      $lookup: {
+        from: "subscriptions",
+        localField: "_id",
+        foreignField: "subscriber",
+        as: "subscribedTo",
+      },
+    },
+    {
+      $addFields: {
+        subscriberCount: { $size: "$subscribers" },
+        subscribedToCount: { $size: "$subscribedTo" },
+        isSubscribed: {
+          $cond: {
+            $if: { $in: [req.user?._id, "$subscribers.subscriber"] },
+            then: true,
+            else: false,
+          },
+        },
+      },
+    },
+    {
+      $project: {
+        fullname: 1,
+        username: 1,
+        avatar: 1,
+        cover: 1,
+        email: 1,
+        createdAt: 1,
+        subscriberCount: 1,
+        subscribedToCount: 1,
+        isSubscribed: 1,
+        subscribers: 0,
+        subscribedTo: 0,
+      },
+    },
+  ]);
+
+  console.log(channel);
+
+  if (!channel || channel.length === 0) {
+    throw new apiError(404, "Channel does not exist");
+  }
+
+  return res
+    .status(200)
+    .json(
+      new apiResponse(200, channel[0], "User channel fetched successfully")
+    );
+});
+
+const getUserWatchHistory = asyncHandler(async (req, res) => {
+  const user = User.aggregate([
+    {
+      $match: {
+        _id: new mongoose.Types.ObjectId(req.user._id),
+      },
+    },
+    {
+      $lookup: {
+        from: "videos",
+        localField: "watchHistory",
+        foreignField: "_id",
+        as: "watchHistory",
+        pipeline: [
+          {
+            $lookup: {
+              from: "users",
+              localField: "owner",
+              foreignField: "_id",
+              as: "owner",
+              pipeline: [
+                {
+                  $project: {
+                    fullname: 1,
+                    username: 1,
+                    avatar: 1,
+                  },
+                },
+              ],
+            },
+          },
+          {
+            $addFields: {
+              // $first: "$owner", another way to get the first element
+              owner: { $arrayElemAt: ["$owner", 0] },
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  if (!user || user.length === 0) {
+    throw new apiError(404, "No videos found in watch history");
+  }
+
+  return res
+    .status(200)
+    .json(
+      new apiResponse(
+        200,
+        user[0].watchHistory,
+        "Watch history fetched successfully"
+      )
+    );
 });
 
 export {
@@ -325,4 +461,5 @@ export {
   updateUser,
   updateUserAvatar,
   updateUserCover,
+  getUserChannelProfile,
 };
