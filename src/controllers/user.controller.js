@@ -7,6 +7,7 @@ import {
   deleteFileCloudinary,
 } from "../utils/Cloudinary.js";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 const generateAccessAndRefreshToken = async userId => {
   try {
@@ -151,7 +152,7 @@ const logoutUser = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(
     req.user._id,
     {
-      $set: { refreshToken: undefined },
+      $unset: { refreshToken: 1 },
     },
     {
       new: true,
@@ -175,6 +176,7 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
     throw new apiError(401, "Please login to access");
   }
   try {
+    console.log("RefreshToken is:" ,refreshToken);
     const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
     const user = await User.findById(decoded?._id);
     if (!user) {
@@ -357,7 +359,7 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
         subscribedToCount: { $size: "$subscribedTo" },
         isSubscribed: {
           $cond: {
-            $if: { $in: [req.user?._id, "$subscribers.subscriber"] },
+            if: { $in: [req.user?._id, "$subscribers.subscriber"] },
             then: true,
             else: false,
           },
@@ -375,8 +377,6 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
         subscriberCount: 1,
         subscribedToCount: 1,
         isSubscribed: 1,
-        subscribers: 0,
-        subscribedTo: 0,
       },
     },
   ]);
@@ -395,7 +395,7 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
 });
 
 const getUserWatchHistory = asyncHandler(async (req, res) => {
-  const user = User.aggregate([
+  const user = await User.aggregate([
     {
       $match: {
         _id: new mongoose.Types.ObjectId(req.user._id),
@@ -427,8 +427,9 @@ const getUserWatchHistory = asyncHandler(async (req, res) => {
           },
           {
             $addFields: {
-              // $first: "$owner", another way to get the first element
-              owner: { $arrayElemAt: ["$owner", 0] },
+              owner: {
+                $first: "$owner",
+              },
             },
           },
         ],
@@ -437,7 +438,7 @@ const getUserWatchHistory = asyncHandler(async (req, res) => {
   ]);
 
   if (!user || user.length === 0) {
-    throw new apiError(404, "No videos found in watch history");
+    throw new apiError(404, "User does not exist");
   }
 
   return res
@@ -462,5 +463,5 @@ export {
   updateUserAvatar,
   updateUserCover,
   getUserChannelProfile,
-  getUserWatchHistory
+  getUserWatchHistory,
 };
